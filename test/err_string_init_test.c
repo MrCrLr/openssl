@@ -34,6 +34,7 @@
 #include <openssl/err.h>
 
 #include "testutil.h"
+#include "threadstest.h"
 
 #if !defined(OPENSSL_SYS_WINDOWS)
 #include <signal.h>
@@ -49,6 +50,8 @@ static int persist = 0;
 static int alloc_count = 0;
 static int injected = 0;
 static int scenario_done = 0;
+static int fresh_thread = 0;
+static const char *fresh_thread_result = NULL;
 
 static int should_fail(void)
 {
@@ -83,10 +86,25 @@ static void test_free(void *addr, const char *file, int line)
     free(addr);
 }
 
+static void fresh_thread_lookup(void)
+{
+    alloc_count = 0;
+    fail_at = 0;
+    persist = 1;
+    armed = 1;
+    fresh_thread_result = ERR_reason_error_string(ERR_R_MALLOC_FAILURE);
+    armed = 0;
+}
+
 static int test_err_string_init_alloc_failure(void)
 {
     if (!TEST_true(scenario_done))
         return 0;
+    if (fresh_thread) {
+        TEST_info("fresh-thread lookup made %d allocations", alloc_count);
+        return TEST_str_eq(fresh_thread_result, "malloc failure")
+            && TEST_int_eq(alloc_count, 0);
+    }
     TEST_info("allocation %d%s of %d %s", fail_at, persist ? " onwards" : "",
         alloc_count, injected ? "failed" : "not reached");
 
@@ -108,11 +126,14 @@ int setup_tests(void)
 int global_init(void)
 {
     const char *e = getenv("ERR_STRING_INIT_FAIL_AT");
+    thread_t thread;
 
     if (e != NULL && *e != '\0')
         fail_at = atoi(e);
     e = getenv("ERR_STRING_INIT_FAIL_PERSIST");
     persist = e != NULL && *e != '\0';
+    e = getenv("ERR_STRING_INIT_FRESH_THREAD");
+    fresh_thread = e != NULL && *e != '\0';
 
     if (!CRYPTO_set_mem_functions(test_malloc, test_realloc, test_free))
         return 0;
@@ -124,6 +145,16 @@ int global_init(void)
      */
     if (!OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, NULL))
         return 0;
+
+    if (fresh_thread) {
+        if (!OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL)
+            || ERR_reason_error_string(ERR_R_MALLOC_FAILURE) == NULL
+            || !run_thread(&thread, fresh_thread_lookup)
+            || !wait_for_thread(thread))
+            return 0;
+        scenario_done = 1;
+        return 1;
+    }
 
 #if !defined(OPENSSL_SYS_WINDOWS)
     alarm(SCENARIO_TIMEOUT);

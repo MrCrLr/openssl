@@ -136,6 +136,8 @@ static const ERR_STRING_DATA ERR_str_reasons[] = {
 
 static CRYPTO_ONCE err_string_init = CRYPTO_ONCE_STATIC_INIT;
 static CRYPTO_RWLOCK *err_string_lock = NULL;
+/* Published after the structural lock and hash are initialized. */
+static uint64_t err_string_ready = 0;
 
 #ifndef OPENSSL_NO_ERR
 static ERR_STRING_DATA *int_err_get_item(const ERR_STRING_DATA *);
@@ -220,6 +222,8 @@ DEFINE_RUN_ONCE_STATIC(do_err_strings_init)
         return 0;
     }
 #endif
+    /* Keep the fallback path when lock-free atomics are unavailable. */
+    (void)CRYPTO_atomic_store(&err_string_ready, 1, NULL);
     return 1;
 }
 
@@ -239,8 +243,11 @@ DEFINE_RUN_ONCE_STATIC(do_err_strings_init)
 static int err_strings_init(void)
 {
     void *err;
+    uint64_t ready;
     int ret;
 
+    if (CRYPTO_atomic_load(&err_string_ready, &ready, NULL) && ready != 0)
+        return 1;
     if (!err_shelve_state(&err))
         return 0;
     ret = RUN_ONCE(&err_string_init, do_err_strings_init);

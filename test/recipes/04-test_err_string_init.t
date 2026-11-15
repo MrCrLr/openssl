@@ -24,8 +24,9 @@ plan skip_all => "This test should not be run under valgrind"
 # framework is set up.  Then do the same with every allocation from that
 # index onwards failing.
 my @fail_at = (0 .. 7);
+my $fresh_thread_tests = disabled("threads") || disabled("err") ? 0 : 1;
 
-plan tests => 2 * scalar @fail_at;
+plan tests => 2 * scalar(@fail_at) + $fresh_thread_tests;
 
 local $ENV{OPENSSL_TEST_MFAIL_DISABLE} = 1;
 local $ENV{ASAN_OPTIONS} = "allocator_may_return_null=true";
@@ -35,6 +36,12 @@ foreach my $n (@fail_at) {
     local $ENV{ERR_STRING_INIT_FAIL_AT} = $n;
     ok(run(test(["err_string_init_test"])),
        "allocation failure $n during error string initialisation");
+}
+
+if ($fresh_thread_tests) {
+    local $ENV{ERR_STRING_INIT_FRESH_THREAD} = 1;
+    ok(run(test(["err_string_init_test"])),
+       "fresh-thread lookup after successful error string initialisation");
 }
 
 foreach my $n (@fail_at) {
